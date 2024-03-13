@@ -20,7 +20,9 @@ SharedNavigation::SharedNavigation(void) : p_nh_("~") {
   this->s_repellors_  = this->p_nh_.subscribe(this->t_repellors_, 1, &SharedNavigation::on_received_repellors, this);
   this->s_attractors_ = this->p_nh_.subscribe(this->t_attractors_, 1, &SharedNavigation::on_received_attractors, this);
   // Initialiaze publishers
-  this->p_velocity_	   = this->p_nh_.advertise<geometry_msgs::Twist>(this->t_velocity_, 1);
+  this->p_velocity_   = this->p_nh_.advertise<geometry_msgs::Twist>(this->t_velocity_, 1);
+  this->p_partial_velocity_ = this->p_nh_.advertise<geometry_msgs::PoseArray>("pt_velocity", 1);
+  this->p_angular_directions_ = this->p_nh_.advertise<geometry_msgs::PoseArray>("pt_angular_directions", 1);
 
   // Initialize services
   this->srv_enable_ = this->p_nh_.advertiseService("navigation_enable", &SharedNavigation::on_requested_enable, this);
@@ -196,6 +198,21 @@ void SharedNavigation::Stop(void) {
 
 float SharedNavigation::get_angular_velocity_repellors(proximitygrid::ProximityGrid& data) {
 
+
+  /*
+   * The setup is the following:
+   *  - The x axis is aligned with the front of the robot
+   *
+   *          y
+   *   _______|____
+   *  |       |    |
+   *  |       |    |
+   *  --------|------> x
+   *  |       |    |
+   *  |_______|____|
+   *          |
+   */
+
   proximitygrid::ProximityGridConstIt	it;
   float distance, angle;
   float clambda, csigma, cdtheta;
@@ -208,21 +225,41 @@ float SharedNavigation::get_angular_velocity_repellors(proximitygrid::ProximityG
 
   const int n_vertices = 4;
 
-  std::vector<float> vertices_x = {0.35,-0.35, 0.35,-0.35}; // [m]
-  std::vector<float> vertices_y = {0.45, 0.45,-0.90,-0.90}; // [m]
+  std::vector<float> vertices_x = {0.45,-0.90,-0.90, 0.45}; // [m]
+  std::vector<float> vertices_y = {0.35, 0.35,-0.35,-0.35}; // [m]
 
-  std::vector<float> vertices_r = { 0.57, 0.57, 0.97, 0.97}; // [m]
-  std::vector<float> vertices_a = {-0.66,-0.66,-2.77,-2.77}; // [rad]
+  std::vector<float> vertices_r(n_vertices);
+  std::vector<float> vertices_t(n_vertices);
 
+  // Compute the radius and the angle of each vertex
+  for (int index_ver = 0; index_ver < n_vertices; index_ver++) {
+    vertices_r[index_ver] = std::sqrt(std::pow(vertices_x[index_ver], 2) + std::pow(vertices_y[index_ver], 2));
+    vertices_t[index_ver] = std::atan2(vertices_y[index_ver], vertices_x[index_ver]);
+  }
+
+  //std::vector<float> vertices_r = { 0.57, 0.57, 0.97, 0.97}; // [m]
+  //std::vector<float> vertices_a = { 0.66,-0.66, 2.77,-2.77}; // [rad]
+  
   float hangle = 0.0;
 
   float distance_obj_vert = 0.0;
   float angle_obj_vert = 0.0;
 
+  // Save the current state of the vertices
   std::array<std::list<float>, n_vertices> vertices;
+
+  // For each vertex compute the potential field
+  std::array<float, (n_vertices + 1)> w_verts;
+  for (int index_ver = 0; index_ver <= n_vertices; index_ver++) {
+    w_verts[index_ver] = 0.0f;
+  }
+
   for (int index_ver = 0; index_ver < n_vertices; index_ver++) {
     vertices[index_ver].clear();
   }
+
+  // Initialize the void partial velocities
+  this->clear_partial_velocity();
 
   // Iterate over the sectors
   for(it=data.Begin(); it!=data.End(); ++it) {
@@ -235,15 +272,25 @@ float SharedNavigation::get_angular_velocity_repellors(proximitygrid::ProximityG
     if(std::isinf(distance) == true || std::isnan(distance) == true )
       continue;
 
-    // Now shift the sector to the corner of the robot
-    for (int index_ver = 0; index_ver < n_vertices; index_ver++) {
+    // Add the original angle to the list
+    this->add_partial_velocity(0.0f, 0.0f, angle);
 
-      // Compute the new distance
-      distance_obj_vert = SharedNavigation::compute_distance(vertices_r[index_ver], distance, vertices_a[index_ver], angle);
-      // Compute the new angle
-      angle_obj_vert = SharedNavigation::compute_theta_first(distance, angle, vertices_r[index_ver], vertices_a[index_ver]);
-      // TODO: check the sign of the angle
-      hangle = SharedNavigation::compute_hangle(angle, angle_obj_vert);
+    // Now shift the sector to the corner of the robot
+    for (int index_ver = 0; index_ver <= n_vertices; index_ver++) {
+
+      if (!index_ver == n_vertices) {
+        // Compute the new distance
+        distance_obj_vert = SharedNavigation::compute_distance(vertices_r[index_ver], distance, vertices_t[index_ver], angle);
+        // Compute the new angle
+        angle_obj_vert = SharedNavigation::compute_theta_first(distance, angle, vertices_r[index_ver], vertices_t[index_ver]);
+        // TODO: check the sign of the angle
+        hangle = SharedNavigation::compute_hangle(angle, angle_obj_vert);
+
+        // The last vertex is a special case
+      } else {
+        angle_obj_vert = angle;
+        distance_obj_vert = distance;
+      }
 
       // Compute the contribution to the velocity
       clambda = this->dyn_angular_repellors_strength_*
@@ -261,38 +308,68 @@ float SharedNavigation::get_angular_velocity_repellors(proximitygrid::ProximityG
               + (robot_width + safe_distance_lateral)/(robot_width + safe_distance_lateral + distance_obj_vert ) );
 
       // Compute current angular velocity for this sector
-      cw = clambda*(hangle)*std::exp(-(std::pow(hangle, 2))/(2.0f*pow(csigma, 2)));
+      cw = clambda*(-angle_obj_vert)*std::exp(-(std::pow(angle_obj_vert, 2))/(2.0f*pow(csigma, 2)));
 
-      // Update the list
-      vertices[index_ver].push_back(hangle);
+      // Set the partial velocities
+      this->add_partial_velocity(vertices_x[index_ver], vertices_y[index_ver], hangle);
 
       // Update the total angular velocity
-      w += cw;
+      w_verts[index_ver] += cw;
     }
   }
 
+  // Add the compute w
   for (int index_ver = 0; index_ver < n_vertices; index_ver++) {
-    ROS_INFO("Vertices [%d]:", index_ver);
-    for (std::list<float>::iterator it = vertices[index_ver].begin(); it != vertices[index_ver].end(); ++it)
-      std::cout << std::fixed << std::setprecision(4) << *it << " ";
-    std::cout << std::endl;
+    this->add_angular_directions(vertices_x[index_ver], vertices_y[index_ver], w_verts[index_ver]);
   }
-  std::cout << "------------------------------------------------------------------" << std::endl;
-  return w;
+  this->add_angular_directions(0.0f, 0.0f, w_verts[n_vertices]);
+
+  // Publish the partial velocity
+  this->publish_partial_velocity();
+
+
+  // Compute the mean of the total angular velocity required
+  return std::accumulate(w_verts.begin(), w_verts.end(), 0.0f) / (n_vertices + 1);
+}
+
+void SharedNavigation::clear_partial_velocity(void) {
+  this->partial_velocity_ = geometry_msgs::PoseArray();
+  this->partial_velocity_.header.stamp = ros::Time::now();
+  this->partial_velocity_.header.frame_id = this->base_frame_;
+
+  this->angular_directions_ = geometry_msgs::PoseArray();
+  this->angular_directions_.header.stamp = ros::Time::now();
+  this->angular_directions_.header.frame_id = this->base_frame_;
+}
+
+void SharedNavigation::publish_partial_velocity(void) {
+  this->p_partial_velocity_.publish(this->partial_velocity_);
+  this->p_angular_directions_.publish(this->angular_directions_);
+}
+
+void SharedNavigation::add_partial_velocity(float x, float y, float w) {
+  geometry_msgs::Pose pose;
+  pose.position.x = x;
+  pose.position.y = y;
+  pose.orientation = tf::createQuaternionMsgFromYaw(w);
+  this->partial_velocity_.poses.push_back(pose);
+}
+
+void SharedNavigation::add_angular_directions(float x, float y, float w) {
+  geometry_msgs::Pose pose;
+  pose.position.x = x;
+  pose.position.y = y;
+  pose.orientation = tf::createQuaternionMsgFromYaw(w);
+  this->angular_directions_.poses.push_back(pose);
 }
 
 float SharedNavigation::compute_hangle(float theta, float theta_first) {
   float hangle = (theta) - theta_first;
 
-  hangle -= M_PI/2.0f;
-
   if (hangle > M_PI)
     hangle = hangle - 2*M_PI;
   else if (hangle < -M_PI)
     hangle = hangle + 2*M_PI;
-
-  if (theta > 0.0f)
-    hangle *= -1.0f;
 
   return hangle;
 }
@@ -303,24 +380,10 @@ float SharedNavigation::compute_distance(float r_1, float r_2, float theta_1, fl
 
 float SharedNavigation::compute_theta_first(float d, float theta, float r, float phi) {
 
-  // In order to be consistent with the atan2 function, we need to shift the angle
-  // and put it as a mathematical angle. (not in reference withe the direction of the robot)
-  theta = theta + M_PI/2.0f;
-  if (theta > M_PI)
-    theta = theta - 2*M_PI;
-  else if (theta < -M_PI)
-    theta = theta + 2*M_PI;
-
-  phi = phi + M_PI/2.0f;
-  if (phi > M_PI)
-    phi = phi - 2*M_PI;
-  else if (phi < -M_PI)
-    phi = phi + 2*M_PI;
-
   float new_x = d * std::cos(theta) - r * std::cos(phi);
   float new_y = d * std::sin(theta) - r * std::sin(phi);
 
-  return std::atan2(new_x, new_y);
+  return std::atan2(new_y, new_x);
 
 }
 

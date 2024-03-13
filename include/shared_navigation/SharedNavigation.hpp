@@ -5,11 +5,16 @@
 #include <exception>
 #include <cmath>
 #include <list>
+#include <numeric>
 
 // ROS includes
 #include <ros/ros.h>
 #include <std_srvs/Empty.h>
 #include <dynamic_reconfigure/server.h>
+
+#include <geometry_msgs/PoseArray.h>
+#include <geometry_msgs/Pose.h>
+#include <geometry_msgs/Twist.h>
 
 // Package includes
 #include "proximity_grid/ProximityGrid.hpp"
@@ -72,6 +77,12 @@ class SharedNavigation {
     float compute_theta_first(float d, float theta, float r, float phi);
     float compute_hangle(float theta, float theta_first);
 
+    // Utilities for partial velocity publications
+    void clear_partial_velocity();
+    void publish_partial_velocity();
+    void add_partial_velocity(float x, float y, float w);
+    void add_angular_directions(float x, float y, float w);
+
     void  init_update_rate(float rate);
 
   private:
@@ -90,6 +101,8 @@ class SharedNavigation {
 
     // Publishers
     ros::Publisher  p_velocity_;
+    ros::Publisher  p_angular_directions_;
+    ros::Publisher  p_partial_velocity_;
 
     // Services
     ros::ServiceServer  srv_enable_;
@@ -125,6 +138,10 @@ class SharedNavigation {
     ros::Timer  publish_timer_;
     ros::Timer  target_timer_;
     float       publish_frequency_;
+
+    // Partial Velocity
+    geometry_msgs::PoseArray partial_velocity_;
+    geometry_msgs::PoseArray angular_directions_;
 
     // Velocity Dynamics
     float dyn_angular_velocity_min_;

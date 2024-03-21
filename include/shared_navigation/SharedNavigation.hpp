@@ -76,12 +76,14 @@ class SharedNavigation {
     float compute_distance(float r_1, float r_2, float theta_1, float theta_2);
     float compute_theta_first(float d, float theta, float r, float phi);
     float compute_hangle(float theta, float theta_first);
+    std::vector<float> sum_forces(std::vector<float> forces_angle, std::vector<float> forces_distance);
 
     // Utilities for partial velocity publications
     void clear_partial_velocity();
     void publish_partial_velocity();
     void add_partial_velocity(float x, float y, float w);
     void add_angular_directions(float x, float y, float w);
+    float compute_local_potential(float d, float theta);
 
     void  init_update_rate(float rate);
 

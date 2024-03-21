@@ -148,7 +148,10 @@ void SharedNavigation::MakeVelocity(void) {
     vlinear_a = this->get_linear_velocity_attractors(this->pr_attractors_);
     vlinear   = vlinear_a + vlinear_r;
   }
-  //  vlinear = this->get_linear_velocity_repellors(this->pr_repellors_);
+
+  if (vlinear < 0.0 ) {
+    vangular_scaled = -vangular_scaled;
+  }
 
   // Fill the Twist message
   //this->velocity_.linear.x  = 0.0;
@@ -196,6 +199,26 @@ void SharedNavigation::Stop(void) {
   ROS_WARN("[SharedNavigation] Node has been stopped");
 }
 
+template <typename T> int sgn(T val) {
+    return (T(0) < val) - (val < T(0));
+}
+
+float median(std::vector<float> medi) 
+{
+  if (medi.size() == 0) 
+    return 0;
+
+    sort(medi.begin(), medi.end());     // sort temperatures
+            
+    float tmedian;
+    if (medi.size() % 2 == 0)           // even
+        tmedian = (medi[medi.size() / 2 - 1] + medi[medi.size() / 2]) / 2;
+    else                                // odd
+        tmedian = medi[medi.size() / 2];
+    
+    return tmedian;
+}
+
 float SharedNavigation::get_angular_velocity_repellors(proximitygrid::ProximityGrid& data) {
 
 
@@ -213,6 +236,8 @@ float SharedNavigation::get_angular_velocity_repellors(proximitygrid::ProximityG
    *          |
    */
 
+  try {
+
   proximitygrid::ProximityGridConstIt	it;
   float distance, angle;
   float clambda, csigma, cdtheta;
@@ -225,7 +250,9 @@ float SharedNavigation::get_angular_velocity_repellors(proximitygrid::ProximityG
 
   const int n_vertices = 4;
 
-  std::vector<float> vertices_x = {0.45,-0.90,-0.90, 0.45}; // [m]
+  //std::vector<float> vertices_x = {0.45,-0.90,-0.90, 0.45}; // [m]
+  std::vector<float> vertices_x = {0.65,-0.50,-0.50, 0.65}; // [m]
+
   std::vector<float> vertices_y = {0.35, 0.35,-0.35,-0.35}; // [m]
 
   std::vector<float> vertices_r(n_vertices);
@@ -237,9 +264,6 @@ float SharedNavigation::get_angular_velocity_repellors(proximitygrid::ProximityG
     vertices_t[index_ver] = std::atan2(vertices_y[index_ver], vertices_x[index_ver]);
   }
 
-  //std::vector<float> vertices_r = { 0.57, 0.57, 0.97, 0.97}; // [m]
-  //std::vector<float> vertices_a = { 0.66,-0.66, 2.77,-2.77}; // [rad]
-  
   float hangle = 0.0;
 
   float distance_obj_vert = 0.0;
@@ -261,6 +285,17 @@ float SharedNavigation::get_angular_velocity_repellors(proximitygrid::ProximityG
   // Initialize the void partial velocities
   this->clear_partial_velocity();
 
+  std::vector<std::vector<float>> objs_theta;
+  std::vector<std::vector<float>> objs_weights;
+
+  std::vector<float> partial_weights;
+  std::vector<float> partial_angles;
+
+  for (int index_ver = 0; index_ver < n_vertices; index_ver++) {
+    objs_theta.push_back(std::vector<float>());
+    objs_weights.push_back(std::vector<float>());
+  }
+
   // Iterate over the sectors
   for(it=data.Begin(); it!=data.End(); ++it) {
 
@@ -273,32 +308,17 @@ float SharedNavigation::get_angular_velocity_repellors(proximitygrid::ProximityG
       continue;
 
     // Add the original angle to the list
-    this->add_partial_velocity(0.0f, 0.0f, angle);
+    //this->add_partial_velocity(0.0f, 0.0f, angle);
 
     // Now shift the sector to the corner of the robot
-    for (int index_ver = 0; index_ver <= n_vertices; index_ver++) {
+    for (int index_ver = 0; index_ver < n_vertices; index_ver++) {
 
-      if (!index_ver == n_vertices) {
-        // Compute the new distance
-        distance_obj_vert = SharedNavigation::compute_distance(vertices_r[index_ver], distance, vertices_t[index_ver], angle);
-        // Compute the new angle
-        angle_obj_vert = SharedNavigation::compute_theta_first(distance, angle, vertices_r[index_ver], vertices_t[index_ver]);
-        // TODO: check the sign of the angle
-        hangle = SharedNavigation::compute_hangle(angle, angle_obj_vert);
-
-        // The last vertex is a special case
-      } else {
-        angle_obj_vert = angle;
-        distance_obj_vert = distance;
-      }
-
-      // Compute the contribution to the velocity
-      clambda = this->dyn_angular_repellors_strength_*
-        exp(-( (distance_obj_vert - safe_distance_front)/this->dyn_angular_repellors_decay_));
-
-      // If distance is smaller than safe distance, maximum value of lambda
-      if( distance_obj_vert < (safe_distance_front) )
-        clambda = this->dyn_angular_repellors_strength_;
+      // Compute the new distance
+      distance_obj_vert = SharedNavigation::compute_distance(vertices_r[index_ver], distance, vertices_t[index_ver], angle);
+      // Compute the new angle
+      angle_obj_vert = SharedNavigation::compute_theta_first(distance, angle, vertices_r[index_ver], vertices_t[index_ver]);
+      // TODO: check the sign of the angle
+      hangle = SharedNavigation::compute_hangle(angle, angle_obj_vert);
 
       // Fixed sector angle
       cdtheta = data.GetAngleIncrement();
@@ -307,29 +327,80 @@ float SharedNavigation::get_angular_velocity_repellors(proximitygrid::ProximityG
       csigma  = std::atan( std::tan(cdtheta/2.0f) +
               + (robot_width + safe_distance_lateral)/(robot_width + safe_distance_lateral + distance_obj_vert ) );
 
-      // Compute current angular velocity for this sector
-      cw = clambda*(-angle_obj_vert)*std::exp(-(std::pow(angle_obj_vert, 2))/(2.0f*pow(csigma, 2)));
+      objs_theta[index_ver].push_back( hangle );
+      objs_weights[index_ver].push_back( csigma );
 
       // Set the partial velocities
       this->add_partial_velocity(vertices_x[index_ver], vertices_y[index_ver], hangle);
 
-      // Update the total angular velocity
-      w_verts[index_ver] += cw;
     }
   }
 
+  for (int index_ver = 0; index_ver < n_vertices; index_ver++) {
+    std::vector<float> tmp = this->sum_forces(objs_theta[index_ver], objs_weights[index_ver]);
+    partial_angles.push_back( tmp[1] );
+    partial_weights.push_back( tmp[0] );
+  }
+ 
   // Add the compute w
   for (int index_ver = 0; index_ver < n_vertices; index_ver++) {
-    this->add_angular_directions(vertices_x[index_ver], vertices_y[index_ver], w_verts[index_ver]);
+    this->add_angular_directions(vertices_x[index_ver], vertices_y[index_ver], partial_angles[index_ver]);
   }
-  this->add_angular_directions(0.0f, 0.0f, w_verts[n_vertices]);
 
-  // Publish the partial velocity
+  std::vector<float> final_force = this->sum_forces(partial_angles, partial_weights);
+  this->add_angular_directions(0.0f, 0.0f, final_force[1]);
   this->publish_partial_velocity();
 
+  return compute_local_potential(final_force[0], final_force[1]);
 
-  // Compute the mean of the total angular velocity required
-  return std::accumulate(w_verts.begin(), w_verts.end(), 0.0f) / (n_vertices + 1);
+  } catch (std::exception& e) {
+    ROS_ERROR("SharedNavigation: %s", e.what());
+    return 0.0f;
+  }
+  
+}
+
+float SharedNavigation::compute_local_potential(float d, float theta) {
+
+  float clambda = this->dyn_angular_repellors_strength_ *
+    exp(-( ((1.0f/d) - safe_distance_front_)/this->dyn_angular_repellors_decay_));
+
+  if( (1.0f/d) < (safe_distance_front_) )
+    clambda = this->dyn_angular_repellors_strength_;
+
+  float potential = clambda * theta * std::exp(-(std::pow(theta, 2))/(2.0f*pow( d , 2)));
+
+  if (std::isnan(potential) == true)
+    potential = 0.0f;
+
+  return potential;
+
+}
+
+std::vector<float> SharedNavigation::sum_forces(std::vector<float> forces_angle, std::vector<float> forces_distance) {
+
+  std::vector<float> forces_x;
+  std::vector<float> forces_y;
+
+  for (int index_forces = 0; index_forces < forces_angle.size(); index_forces++) {
+    forces_x.push_back(std::cos(forces_angle[index_forces]) * forces_distance[index_forces]);
+    forces_y.push_back(std::sin(forces_angle[index_forces]) * forces_distance[index_forces]);
+  }
+
+  float sum_x = std::accumulate(forces_x.begin(), forces_x.end(), 0.0f);
+  float sum_y = std::accumulate(forces_y.begin(), forces_y.end(), 0.0f);
+
+  float final_theta = 0.0f;
+  float final_distance = 0.0f;
+
+  final_distance = std::sqrt(std::pow(sum_x, 2) + std::pow(sum_y, 2));
+
+  final_theta = std::atan2(sum_y, sum_x);
+
+  if (std::isnan(final_theta) == true)
+    final_theta = 0.0f;
+
+  return std::vector<float>{final_distance, final_theta};
 }
 
 void SharedNavigation::clear_partial_velocity(void) {
@@ -412,9 +483,10 @@ float SharedNavigation::get_linear_velocity_repellors(proximitygrid::ProximityGr
   float x;
   float y;
 
-  x = 6.0f; // why not taken as max or inf??
+  x = std::numeric_limits<float>::infinity();
+
   robot_width         = this->size_ + 2.0f*this->safe_distance_lateral_;
-  safe_distance_front = 0.0f; // = this->safe_distance_front_;
+  safe_distance_front = this->safe_distance_front_;
 
   // Iterate over the sectors
   for(it=data.Begin(); it!=data.End(); ++it) {
@@ -446,12 +518,11 @@ float SharedNavigation::get_linear_velocity_repellors(proximitygrid::ProximityGr
   if (x > safe_distance_front) {
     y = this->dyn_linear_velocity_max_*
         (1.0f - std::exp(- (x - safe_distance_front)/this->dyn_linear_velocity_decay_ ));
-  }else{
-    y = 0.2f;
-    if (min_angle < -M_PI/2.0f || min_angle > M_PI/2.0f) {
-      y = -y;
-    }
   }
+
+  //if (min_angle < -M_PI/2.0f || min_angle > M_PI/2.0f) {
+  //  y = -y;
+  //}
 
   return y;
 }

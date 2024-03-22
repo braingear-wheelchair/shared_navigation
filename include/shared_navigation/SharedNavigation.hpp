@@ -50,7 +50,7 @@ class SharedNavigation {
 
   private:
 
-    float get_angular_velocity_repellors(proximitygrid::ProximityGrid& data);
+    // float get_angular_velocity_repellors(proximitygrid::ProximityGrid& data);
     float get_angular_velocity_attractors(float angle);
     float get_linear_velocity_repellors(proximitygrid::ProximityGrid& data);
     float get_linear_velocity_attractors(proximitygrid::ProximityGrid& data);
@@ -78,12 +78,16 @@ class SharedNavigation {
     float compute_hangle(float theta, float theta_first);
     std::vector<float> sum_forces(std::vector<float> forces_angle, std::vector<float> forces_distance);
 
+    // Compute parts of the potential field
+    std::vector<float> get_force_attractors();
+    std::vector<float> get_force_repellors();
+
     // Utilities for partial velocity publications
     void clear_partial_velocity();
     void publish_partial_velocity();
     void add_partial_velocity(float x, float y, float w);
     void add_angular_directions(float x, float y, float w);
-    float compute_local_potential(float d, float theta);
+    std::vector<float> compute_local_potential(float d, float theta);
 
     void  init_update_rate(float rate);
 

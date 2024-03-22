@@ -116,7 +116,8 @@ void SharedNavigation::MakeVelocity(void) {
   float vangular_limited, vangular_scaled;
 
   // Compute orientation for repellors
-  if(this->n_enable_repellors_ == true) {
+  /*if(this->n_enable_repellors_ == true) {
+
     vangular_r  = this->get_angular_velocity_repellors(this->pr_repellors_);
     ROS_DEBUG_NAMED("velocity_repellors", "Repellors angular velocity: %f [deg/s]", rad2deg(vangular_r));
   }
@@ -125,9 +126,30 @@ void SharedNavigation::MakeVelocity(void) {
   if(this->n_enable_attractors_ == true) {
     vangular_a = this->get_angular_velocity_attractors(this->target_);
     ROS_DEBUG_NAMED("velocity_attractors", "Attractors angular velocity: %f [deg/s]", rad2deg(vangular_a));
+  }*/
+
+  std::vector<float> force_attractors = {0.0f, 0.0f};
+  std::vector<float> force_repellors  = {0.0f, 0.0f};
+
+  if(this->n_enable_attractors_ == true) {
+    force_attractors = this->get_force_attractors();
   }
 
-  vangular = vangular_a - vangular_r;
+  if(this->n_enable_repellors_ == true) {
+    force_repellors = this->get_force_repellors();
+  }
+
+  std::vector<float> final_force_theta = {force_repellors[1], force_attractors[1]};
+  std::vector<float> final_force_d     = {force_repellors[0], force_attractors[0]};
+
+  std::vector<float> final_force = this->sum_forces(final_force_theta, final_force_d);
+
+  // Compute the final cmd
+  std::vector<float> final_cmd = compute_local_potential(final_force[0], final_force[1]);
+
+  vlinear = final_cmd[0];
+  vangular = final_cmd[1];
+  // vangular = vangular_a - vangular_r;
 
   // Limit the output velocity between -max and max
   vangular_limited = this->limit_range_value(vangular, 
@@ -143,14 +165,11 @@ void SharedNavigation::MakeVelocity(void) {
                                             this->dyn_angular_velocity_max_);
 
   // Compute linear velocity (repellors based)
-  if(this->is_data_available_ == true){
-    vlinear_r = this->get_linear_velocity_repellors(this->pr_repellors_);
-    vlinear_a = this->get_linear_velocity_attractors(this->pr_attractors_);
-    vlinear   = vlinear_a + vlinear_r;
-  }
-
-  if (vlinear < 0.0 ) {
-    vangular_scaled = -vangular_scaled;
+  if(this->is_data_available_ == false){
+    // vlinear_r = this->get_linear_velocity_repellors(this->pr_repellors_);
+    // vlinear_a = this->get_linear_velocity_attractors(this->pr_attractors_);
+    // vlinear = this->get_linear_velocity(final_force[0], final_force[1]);
+    vlinear = 0.0;
   }
 
   // Fill the Twist message
@@ -219,7 +238,16 @@ float median(std::vector<float> medi)
     return tmedian;
 }
 
-float SharedNavigation::get_angular_velocity_repellors(proximitygrid::ProximityGrid& data) {
+std::vector<float> SharedNavigation::get_force_attractors() {
+  proximitygrid::ProximityGrid data = this->pr_attractors_;
+
+  // Sum the force for each attractor
+  std::vector<float> force = {0.0f, 0.0f};
+
+  return force;
+}
+
+std::vector<float> SharedNavigation::get_force_repellors() {
 
 
   /*
@@ -237,6 +265,8 @@ float SharedNavigation::get_angular_velocity_repellors(proximitygrid::ProximityG
    */
 
   try {
+
+  proximitygrid::ProximityGrid data = this->pr_repellors_;
 
   proximitygrid::ProximityGridConstIt	it;
   float distance, angle;
@@ -351,16 +381,18 @@ float SharedNavigation::get_angular_velocity_repellors(proximitygrid::ProximityG
   this->add_angular_directions(0.0f, 0.0f, final_force[1]);
   this->publish_partial_velocity();
 
-  return compute_local_potential(final_force[0], final_force[1]);
+  return final_force;
+
+  // return compute_local_potential(final_force[0], final_force[1]);
 
   } catch (std::exception& e) {
     ROS_ERROR("SharedNavigation: %s", e.what());
-    return 0.0f;
+    return {0.0f, 0.0f};
   }
   
 }
 
-float SharedNavigation::compute_local_potential(float d, float theta) {
+std::vector<float> SharedNavigation::compute_local_potential(float d, float theta) {
 
   float clambda = this->dyn_angular_repellors_strength_ *
     exp(-( ((1.0f/d) - safe_distance_front_)/this->dyn_angular_repellors_decay_));
@@ -373,7 +405,9 @@ float SharedNavigation::compute_local_potential(float d, float theta) {
   if (std::isnan(potential) == true)
     potential = 0.0f;
 
-  return potential;
+  // TODO: set the correct linear cmd (and according to the sign merge the signal)
+
+  return {1/d, potential};
 
 }
 

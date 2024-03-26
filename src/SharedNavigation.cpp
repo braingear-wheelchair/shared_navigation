@@ -240,11 +240,34 @@ float median(std::vector<float> medi)
 
 std::vector<float> SharedNavigation::get_force_attractors() {
   proximitygrid::ProximityGrid data = this->pr_attractors_;
+  proximitygrid::ProximityGridConstIt it;
 
   // Sum the force for each attractor
-  std::vector<float> force = {0.0f, 0.0f};
+  std::vector<float> final_force = {0.0f, 0.0f};
+  float distance;
+  float angle;
 
-  return force;
+  std::vector<float> distances;
+  std::vector<float> angles;
+
+  // First convert all the attractor to forces
+  for (it = data.Begin(); it != data.End(); ++it) {
+    distance = data.GetSectorValue(it);
+    angle    = data.GetSectorAngle(it);
+
+    if (std::isinf(distance) == true || std::isnan(distance) == true) {
+      continue;
+    }
+
+    // Put the distance as (1/d) in order to be compatible with the attractors
+    distances.push_back((1.0f / distance));
+    angles.push_back(angle);
+
+  }
+  // Second to sum the forces into a final one and return it
+  final_force = SharedNavigation::sum_forces(angles, distances);
+
+  return final_force;
 }
 
 std::vector<float> SharedNavigation::get_force_repellors() {

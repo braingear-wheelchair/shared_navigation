@@ -428,7 +428,12 @@ std::vector<float> SharedNavigation::compute_local_potential(float d, float thet
   if (std::isnan(potential) == true)
     potential = 0.0f;
 
-  // TODO: set the correct linear cmd (and according to the sign merge the signal)
+  // invert the cmd according to the sign of the merged singal
+  // TODO: check the sign
+  if (potential > M_PI/2.0f || potential < -M_PI/2.0f) {
+    potential = M_PI - std::abs(potential);
+    d = d * -1.0f;
+  }
 
   return {1/d, potential};
 

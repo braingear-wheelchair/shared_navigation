@@ -46,7 +46,7 @@ class SharedNavigation {
 
     bool IsRunning(void);
     void Start(void);
-  void Stop(void);
+    void Stop(void);
 
   private:
 
@@ -88,6 +88,7 @@ class SharedNavigation {
     void add_partial_velocity(float x, float y, float w);
     void add_angular_directions(float x, float y, float w);
     std::vector<float> compute_local_potential(float d, float theta);
+    float regulate_velocity(float v);
 
     void  init_update_rate(float rate);
 

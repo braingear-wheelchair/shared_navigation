@@ -139,16 +139,26 @@ void SharedNavigation::MakeVelocity(void) {
     force_repellors = this->get_force_repellors();
   }
 
-  std::vector<float> final_force_theta = {force_repellors[1], force_attractors[1]};
+  // The minus in the force is due to the orientation of the robot (reversed)
+  std::vector<float> final_force_theta = {-force_repellors[1], -force_attractors[1]};
   std::vector<float> final_force_d     = {force_repellors[0], force_attractors[0]};
 
   std::vector<float> final_force = this->sum_forces(final_force_theta, final_force_d);
+
+  this->add_angular_directions(0.0f, 0.0f, final_force[1]);
+  this->add_angular_directions(0.0f, 0.0f, final_force_theta[0]);
+  this->add_angular_directions(0.0f, 0.0f, final_force_theta[1]);
+  this->publish_partial_velocity();
 
   // Compute the final cmd
   std::vector<float> final_cmd = compute_local_potential(final_force[0], final_force[1]);
 
   vlinear = final_cmd[0];
   vangular = final_cmd[1];
+
+  vlinear  = this->regulate_velocity(vlinear);
+  vangular = this->regulate_velocity(vangular);
+
   // vangular = vangular_a - vangular_r;
 
   // Limit the output velocity between -max and max
@@ -164,22 +174,35 @@ void SharedNavigation::MakeVelocity(void) {
                                             this->dyn_angular_velocity_min_, 
                                             this->dyn_angular_velocity_max_);
 
-  // Compute linear velocity (repellors based)
+  // Now do the same with the linear velocity
+  float vlinear_limited = this->limit_range_value(vlinear,
+                                                  -this->dyn_linear_velocity_max_,
+                                                  this->dyn_linear_velocity_max_);
+  float vlinear_scaled  = this->scale_range_value(vlinear_limited, 0.0f,
+                                                  this->dyn_linear_velocity_max_,
+                                                  this->dyn_linear_velocity_min_,
+                                                  this->dyn_linear_velocity_max_);
+
+  // Set to 0 the velocity if the input data is not available
   if(this->is_data_available_ == false){
-    // vlinear_r = this->get_linear_velocity_repellors(this->pr_repellors_);
-    // vlinear_a = this->get_linear_velocity_attractors(this->pr_attractors_);
-    // vlinear = this->get_linear_velocity(final_force[0], final_force[1]);
-    vlinear = 0.0;
+    vlinear_scaled = 0.0f;
+    vangular_scaled = 0.0f;
   }
 
   // Fill the Twist message
   //this->velocity_.linear.x  = 0.0;
-  this->velocity_.linear.x  = vlinear;
+  this->velocity_.linear.x  = vlinear_scaled;
   this->velocity_.linear.y  = 0.0;
   this->velocity_.linear.z  = 0.0;
   this->velocity_.angular.x = 0.0;
   this->velocity_.angular.y = 0.0;
   this->velocity_.angular.z = -vangular_scaled;
+}
+
+float SharedNavigation::regulate_velocity(float v) {
+  if ( std::isnan(v) || std::isinf(v) )
+    return 0.0f;
+  return v;
 }
 
 bool SharedNavigation::IsEnabled(void) {
@@ -423,17 +446,19 @@ std::vector<float> SharedNavigation::compute_local_potential(float d, float thet
   if( (1.0f/d) < (safe_distance_front_) )
     clambda = this->dyn_angular_repellors_strength_;
 
+  // invert the cmd according to the sign of the merged singal
+  if (theta > M_PI/2.0f || theta < -M_PI/2.0f) {
+    theta =  sgn(theta) * (M_PI - std::abs(theta));
+    d = d * -1.0f;
+  }
+
   float potential = clambda * theta * std::exp(-(std::pow(theta, 2))/(2.0f*pow( d , 2)));
 
   if (std::isnan(potential) == true)
     potential = 0.0f;
 
-  // invert the cmd according to the sign of the merged singal
-  // TODO: check the sign
-  if (potential > M_PI/2.0f || potential < -M_PI/2.0f) {
-    potential = M_PI - std::abs(potential);
-    d = d * -1.0f;
-  }
+  if (std::isnan(d) == true)
+    d = 0.0f;
 
   return {1/d, potential};
 

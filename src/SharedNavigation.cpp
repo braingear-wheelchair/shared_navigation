@@ -115,6 +115,9 @@ void SharedNavigation::MakeVelocity(void) {
   float vlinear_a   = 0.0f;
   float vangular_limited, vangular_scaled;
 
+  // Set the nearest obstacle to infinity
+  this->nearest_obstacle_ = std::numeric_limits<float>::max();
+
   // Compute orientation for repellors
   /*if(this->n_enable_repellors_ == true) {
 
@@ -145,17 +148,24 @@ void SharedNavigation::MakeVelocity(void) {
 
   std::vector<float> final_force = this->sum_forces(final_force_theta, final_force_d);
 
-  this->add_angular_directions(0.0f, 0.0f, final_force[1]);
-  this->add_angular_directions(0.0f, 0.0f, final_force_theta[0]);
-  this->add_angular_directions(0.0f, 0.0f, final_force_theta[1]);
+  // Publish partial value of the sum force
+  // TODO put this to a function
+  this->add_angular_directions(0.0f, 0.0f, -final_force[1]);
+  this->add_angular_directions(0.0f, 0.0f, -final_force_theta[0]);
+  this->add_angular_directions(0.0f, 0.0f, -final_force_theta[1]);
   this->publish_partial_velocity();
 
   // Compute the final cmd
   std::vector<float> final_cmd = compute_local_potential(final_force[0], final_force[1]);
 
-  vlinear = final_cmd[0];
+  if (this->n_enable_attractors_) {
+    vlinear = final_cmd[0];
+  }else {
+    vlinear = get_linear_depending_on_distance(this->nearest_obstacle_);
+  }
   vangular = final_cmd[1];
 
+  // Just in case set velocity to 0.0f if they are setted to nan or inf
   vlinear  = this->regulate_velocity(vlinear);
   vangular = this->regulate_velocity(vangular);
 
@@ -174,29 +184,58 @@ void SharedNavigation::MakeVelocity(void) {
                                             this->dyn_angular_velocity_min_, 
                                             this->dyn_angular_velocity_max_);
 
+  // ROS_INFO("vlinear %.4f vangular %.4f", vlinear, vangular);
+
   // Now do the same with the linear velocity
   float vlinear_limited = this->limit_range_value(vlinear,
                                                   -this->dyn_linear_velocity_max_,
                                                   this->dyn_linear_velocity_max_);
-  float vlinear_scaled  = this->scale_range_value(vlinear_limited, 0.0f,
-                                                  this->dyn_linear_velocity_max_,
-                                                  this->dyn_linear_velocity_min_,
-                                                  this->dyn_linear_velocity_max_);
 
   // Set to 0 the velocity if the input data is not available
-  if(this->is_data_available_ == false){
-    vlinear_scaled = 0.0f;
+  if(!this->is_data_available_){
+    vlinear_limited = 0.0f;
     vangular_scaled = 0.0f;
   }
 
+  // TODO: check this
+  // --------------------------------------------------------------------------
+  if (vlinear_limited < 0.0f) {
+    vangular_scaled = -vangular_scaled;
+  }
+  // --------------------------------------------------------------------------
+
   // Fill the Twist message
   //this->velocity_.linear.x  = 0.0;
-  this->velocity_.linear.x  = vlinear_scaled;
+  this->velocity_.linear.x  = vlinear_limited;
   this->velocity_.linear.y  = 0.0;
   this->velocity_.linear.z  = 0.0;
   this->velocity_.angular.x = 0.0;
   this->velocity_.angular.y = 0.0;
   this->velocity_.angular.z = -vangular_scaled;
+}
+
+float SharedNavigation::get_linear_depending_on_distance(float distance) {
+  // I do not care for now to which is the correct distance
+  float safe_distance = std::min(this->safe_distance_front_, this->safe_distance_lateral_);
+  float vlinear = 0.0f;
+
+  // Be sure that the distance is in the correct format
+  distance = std::fabs(distance);
+
+  if (distance > safe_distance) {
+    // IF the distance greater put the velocity similar to the distance
+    // - Fast if the obstacle are far away
+    // - Slow if the obstacle are close
+
+    vlinear = this->dyn_linear_velocity_decay_ * std::pow(distance - safe_distance, 2.0f);
+  }
+
+  if (this->target_ > M_PI/2.0 || this->target_ < -M_PI/2.0) {
+    // Invert the linear velocity
+    vlinear = -vlinear;
+  }
+
+  return vlinear;
 }
 
 float SharedNavigation::regulate_velocity(float v) {
@@ -239,6 +278,72 @@ void SharedNavigation::Stop(void) {
   this->velocity_.angular.z = 0.0f;
   this->p_velocity_.publish(this->velocity_);
   ROS_WARN("[SharedNavigation] Node has been stopped");
+}
+
+std::vector<float> SharedNavigation::get_smart_attractor_sector(float attractor_distace, float attractor_angle) {
+  // The required direction (in this setup the one provided by the proximitygrid)
+  // is confronted with the set of sector in the repellors
+  // Then a smart rule is applied. The rule is defined as follow:
+  // - If the target sector is empty put the attractor in it at d distance
+  // - If the sector is not empty, but the distance is such that you can be there put
+  //   the attractor in it with distance according to it (dobstacle-dsafty)
+  // - If the sector is not empty and the distance do not allow to put a attractor in
+  //   a safe distance put the attractor in the closest sector that allows it
+  //
+  // The output will be a vector in form of { distance, angle }
+
+  std::vector<float> attractor_sector = {0.0f, 0.0f};
+  
+  proximitygrid::ProximityGridConstIt repellor_grid_it; 
+  float distance = 0.0f;
+  float angle    = 0.0f;
+
+  bool found = false;
+
+  repellor_grid_it = this->pr_repellors_.Begin();
+
+  while (!found && repellor_grid_it != this->pr_repellors_.End()) {
+    distance = this->pr_repellors_.GetSectorValue(repellor_grid_it);
+    angle    = this->pr_repellors_.GetSectorAngle(repellor_grid_it);
+
+    // Arrive to the target decision 
+    if (angle < attractor_angle) {
+      repellor_grid_it++;
+    } else {
+      // Now we are in the correct sector
+      found = true;
+
+      // Now check if we are in the case 1 or
+      if (distance > attractor_distance) {
+        // The sector is ok return it with the correct distance
+        attractor_sector[0] = attractor_distace;
+        attractor_sector[1] = angle;
+      } else if (distance > this->size_/2.0f * this->safe_distance_lateral_) {
+        // Then the sector is not full ok, but is easy fixable
+        attractor_sector[0] = this->size_/2.0f + this->safe_distance_lateral_;
+        attractor_sector[1] = angle;
+      } else {
+        // Here there is the real tread
+        // Now is need to check the sector near the target
+        // for now try with recursion
+        if (attractor_angle > 0.0f) {
+          attractor_sector = get_smart_attractor_sector(attractor_distace, attractor_angle - this->pr_repellors_.GetAngleIncrement());
+        } else if (attractor_angle < 0.0f) {
+          attractor_sector = get_smart_attractor_sector(attractor_distace, attractor_angle + this->pr_repellors_.GetAngleIncrement());
+        } else {
+          // Here there is the problem, what is the base case? For now set the sector to 0.0 and hope this situation will be solved
+          // By the user or by the environment
+          attractor_sector[0] = 0.0f;
+          attractor_sector[1] = 0.0f;
+        }
+      }
+    }
+  }
+
+  // TODO: check the case if there the distance will set 1/d. Need to check
+    
+  return attractor_sector;
+  
 }
 
 template <typename T> int sgn(T val) {
@@ -291,6 +396,17 @@ std::vector<float> SharedNavigation::get_force_attractors() {
   final_force = SharedNavigation::sum_forces(angles, distances);
 
   return final_force;
+}
+
+float SharedNavigation::convert_to_pf(float distance) {
+  float cdtheta = this->pr_repellors_.GetAngleIncrement();
+  float csigma = 0.0f;
+
+  float base_size = this->size_/2.0f + this->safe_distance_lateral_;
+
+  csigma = std::atan( std::tan(cdtheta/2.0f) + (base_size) / (base_size + distance) );
+
+  return csigma;
 }
 
 std::vector<float> SharedNavigation::get_force_repellors() {
@@ -396,6 +512,11 @@ std::vector<float> SharedNavigation::get_force_repellors() {
       // TODO: check the sign of the angle
       hangle = SharedNavigation::compute_hangle(angle, angle_obj_vert);
 
+      // If this is the shortest distance
+      if (distance_obj_vert < this->nearest_obstacle_) {
+        this->nearest_obstacle_ = distance_obj_vert;
+      }
+
       // Fixed sector angle
       cdtheta = data.GetAngleIncrement();
 
@@ -460,7 +581,7 @@ std::vector<float> SharedNavigation::compute_local_potential(float d, float thet
   if (std::isnan(d) == true)
     d = 0.0f;
 
-  return {1/d, potential};
+  return {d, potential};
 
 }
 
@@ -692,9 +813,7 @@ void SharedNavigation::on_received_attractors(const proximity_grid::ProximityGri
 
   proximitygrid::ProximityGridConstIt  it;
   proximitygrid::ProximityGrid         grid;
-  float                                angle; // can be removed 
 
-  angle = 0.0f;  // can be removed
   // Convert and store attractor data
   if(proximitygrid::ProximityGridConverter::FromMessage(data, grid) == false) {
     ROS_ERROR("Cannot convert attractors proximity grid message");
@@ -708,9 +827,11 @@ void SharedNavigation::on_received_attractors(const proximity_grid::ProximityGri
       continue;
 
     this->target_ = grid.GetSectorAngle(it) + grid.GetAngleIncrement()/2.0f;
-    this->target_timer_.stop();
-    this->target_timer_.start();
-  }
+    //this->target_timer_.stop();
+    //this->target_timer_.start();
+  } 
+
+  ROS_INFO("Target received: %1.2f", this->target_);
 
   // My code
   if(proximitygrid::ProximityGridConverter::FromMessage(data, this->pr_attractors_) == false) {

@@ -77,6 +77,8 @@ class SharedNavigation {
     float compute_theta_first(float d, float theta, float r, float phi);
     float compute_hangle(float theta, float theta_first);
     std::vector<float> sum_forces(std::vector<float> forces_angle, std::vector<float> forces_distance);
+    float get_linear_depending_on_distance(float distance);
+    std::vector<float> get_smart_attractor_sector();
 
     // Compute parts of the potential field
     std::vector<float> get_force_attractors();
@@ -120,7 +122,6 @@ class SharedNavigation {
     // Proximity grid
     proximitygrid::ProximityGrid   pr_repellors_;
     proximitygrid::ProximityGrid   pr_attractors_;
-    // Not present because the attractors callback start the target timer
 
     // Dynamic reconfigure
     DynamicReconfig               n_dynreconfig_server_;
@@ -163,6 +164,8 @@ class SharedNavigation {
 
     float target_;
     float target_duration_;
+
+    float nearest_obstacle_;
 
     geometry_msgs::Twist  velocity_;
 };

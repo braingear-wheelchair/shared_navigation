@@ -118,27 +118,17 @@ void SharedNavigation::MakeVelocity(void) {
   // Set the nearest obstacle to infinity
   this->nearest_obstacle_ = std::numeric_limits<float>::max();
 
-  // Compute orientation for repellors
-  /*if(this->n_enable_repellors_ == true) {
-
-    vangular_r  = this->get_angular_velocity_repellors(this->pr_repellors_);
-    ROS_DEBUG_NAMED("velocity_repellors", "Repellors angular velocity: %f [deg/s]", rad2deg(vangular_r));
-  }
-
-  // Compute orientation for attractors
-  if(this->n_enable_attractors_ == true) {
-    vangular_a = this->get_angular_velocity_attractors(this->target_);
-    ROS_DEBUG_NAMED("velocity_attractors", "Attractors angular velocity: %f [deg/s]", rad2deg(vangular_a));
-  }*/
-
   std::vector<float> force_attractors = {0.0f, 0.0f};
   std::vector<float> force_repellors  = {0.0f, 0.0f};
 
   if(this->n_enable_attractors_ == true) {
+    // Here there should be a choice, get an attractor directly or
+    // use the "smart" selector
     force_attractors = this->get_force_attractors();
   }
 
   if(this->n_enable_repellors_ == true) {
+    // This should be always true n.d.r.
     force_repellors = this->get_force_repellors();
   }
 
@@ -149,11 +139,7 @@ void SharedNavigation::MakeVelocity(void) {
   std::vector<float> final_force = this->sum_forces(final_force_theta, final_force_d);
 
   // Publish partial value of the sum force
-  // TODO put this to a function
-  this->add_angular_directions(0.0f, 0.0f, -final_force[1]);
-  this->add_angular_directions(0.0f, 0.0f, -final_force_theta[0]);
-  this->add_angular_directions(0.0f, 0.0f, -final_force_theta[1]);
-  this->publish_partial_velocity();
+  this->publish_partial_velocity({-final_force[1], -final_force_theta[0], -final_force_theta[1]});
 
   // Compute the final cmd
   std::vector<float> final_cmd = compute_local_potential(final_force[0], final_force[1]);
@@ -169,8 +155,6 @@ void SharedNavigation::MakeVelocity(void) {
   vlinear  = this->regulate_velocity(vlinear);
   vangular = this->regulate_velocity(vangular);
 
-  // vangular = vangular_a - vangular_r;
-
   // Limit the output velocity between -max and max
   vangular_limited = this->limit_range_value(vangular, 
                                             -this->dyn_angular_velocity_max_,
@@ -184,8 +168,6 @@ void SharedNavigation::MakeVelocity(void) {
                                             this->dyn_angular_velocity_min_, 
                                             this->dyn_angular_velocity_max_);
 
-  // ROS_INFO("vlinear %.4f vangular %.4f", vlinear, vangular);
-
   // Now do the same with the linear velocity
   float vlinear_limited = this->limit_range_value(vlinear,
                                                   -this->dyn_linear_velocity_max_,
@@ -197,7 +179,7 @@ void SharedNavigation::MakeVelocity(void) {
     vangular_scaled = 0.0f;
   }
 
-  // TODO: check this
+  // TODO: check this, due to the reversed orientation of the robot
   // --------------------------------------------------------------------------
   if (vlinear_limited < 0.0f) {
     vangular_scaled = -vangular_scaled;
@@ -280,7 +262,7 @@ void SharedNavigation::Stop(void) {
   ROS_WARN("[SharedNavigation] Node has been stopped");
 }
 
-std::vector<float> SharedNavigation::get_smart_attractor_sector(float attractor_distace, float attractor_angle) {
+std::vector<float> SharedNavigation::get_smart_attractor_sector(float attractor_distance, float attractor_angle) {
   // The required direction (in this setup the one provided by the proximitygrid)
   // is confronted with the set of sector in the repellors
   // Then a smart rule is applied. The rule is defined as follow:
@@ -316,7 +298,7 @@ std::vector<float> SharedNavigation::get_smart_attractor_sector(float attractor_
       // Now check if we are in the case 1 or
       if (distance > attractor_distance) {
         // The sector is ok return it with the correct distance
-        attractor_sector[0] = attractor_distace;
+        attractor_sector[0] = attractor_distance;
         attractor_sector[1] = angle;
       } else if (distance > this->size_/2.0f * this->safe_distance_lateral_) {
         // Then the sector is not full ok, but is easy fixable
@@ -327,9 +309,9 @@ std::vector<float> SharedNavigation::get_smart_attractor_sector(float attractor_
         // Now is need to check the sector near the target
         // for now try with recursion
         if (attractor_angle > 0.0f) {
-          attractor_sector = get_smart_attractor_sector(attractor_distace, attractor_angle - this->pr_repellors_.GetAngleIncrement());
+          attractor_sector = get_smart_attractor_sector(attractor_distance, attractor_angle - this->pr_repellors_.GetAngleIncrement());
         } else if (attractor_angle < 0.0f) {
-          attractor_sector = get_smart_attractor_sector(attractor_distace, attractor_angle + this->pr_repellors_.GetAngleIncrement());
+          attractor_sector = get_smart_attractor_sector(attractor_distance, attractor_angle + this->pr_repellors_.GetAngleIncrement());
         } else {
           // Here there is the problem, what is the base case? For now set the sector to 0.0 and hope this situation will be solved
           // By the user or by the environment
@@ -442,9 +424,8 @@ std::vector<float> SharedNavigation::get_force_repellors() {
 
   const int n_vertices = 4;
 
-  //std::vector<float> vertices_x = {0.45,-0.90,-0.90, 0.45}; // [m]
+  // TODO: set this as a parameters
   std::vector<float> vertices_x = {0.65,-0.50,-0.50, 0.65}; // [m]
-
   std::vector<float> vertices_y = {0.35, 0.35,-0.35,-0.35}; // [m]
 
   std::vector<float> vertices_r(n_vertices);
@@ -499,9 +480,6 @@ std::vector<float> SharedNavigation::get_force_repellors() {
     if(std::isinf(distance) == true || std::isnan(distance) == true )
       continue;
 
-    // Add the original angle to the list
-    //this->add_partial_velocity(0.0f, 0.0f, angle);
-
     // Now shift the sector to the corner of the robot
     for (int index_ver = 0; index_ver < n_vertices; index_ver++) {
 
@@ -539,18 +517,15 @@ std::vector<float> SharedNavigation::get_force_repellors() {
     partial_weights.push_back( tmp[0] );
   }
  
-  // Add the compute w
+  // Add the compute w to the visual output (rviz)
   for (int index_ver = 0; index_ver < n_vertices; index_ver++) {
     this->add_angular_directions(vertices_x[index_ver], vertices_y[index_ver], partial_angles[index_ver]);
   }
 
   std::vector<float> final_force = this->sum_forces(partial_angles, partial_weights);
   this->add_angular_directions(0.0f, 0.0f, final_force[1]);
-  this->publish_partial_velocity();
 
   return final_force;
-
-  // return compute_local_potential(final_force[0], final_force[1]);
 
   } catch (std::exception& e) {
     ROS_ERROR("SharedNavigation: %s", e.what());
@@ -621,7 +596,12 @@ void SharedNavigation::clear_partial_velocity(void) {
   this->angular_directions_.header.frame_id = this->base_frame_;
 }
 
-void SharedNavigation::publish_partial_velocity(void) {
+void SharedNavigation::publish_partial_velocity(std::vector<float> partial_velocities) {
+
+  for (int index_ver = 0; index_ver < partial_velocities.size(); index_ver++) {
+    this->add_angular_directions(0.0f, 0.0f, partial_velocities[index_ver]);
+  }
+
   this->p_partial_velocity_.publish(this->partial_velocity_);
   this->p_angular_directions_.publish(this->angular_directions_);
 }

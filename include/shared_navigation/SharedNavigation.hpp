@@ -78,7 +78,8 @@ class SharedNavigation {
     float compute_hangle(float theta, float theta_first);
     std::vector<float> sum_forces(std::vector<float> forces_angle, std::vector<float> forces_distance);
     float get_linear_depending_on_distance(float distance);
-    std::vector<float> get_smart_attractor_sector();
+    std::vector<float> get_smart_attractor_sector(float attractor_distance, float attractor_angle);
+    float convert_to_pf(float distance);
 
     // Compute parts of the potential field
     std::vector<float> get_force_attractors();
@@ -86,7 +87,7 @@ class SharedNavigation {
 
     // Utilities for partial velocity publications
     void clear_partial_velocity();
-    void publish_partial_velocity();
+    void publish_partial_velocity(std::vector<float> partial_velocities);
     void add_partial_velocity(float x, float y, float w);
     void add_angular_directions(float x, float y, float w);
     std::vector<float> compute_local_potential(float d, float theta);

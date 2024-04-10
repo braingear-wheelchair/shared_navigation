@@ -78,8 +78,10 @@ class SharedNavigation {
     float compute_hangle(float theta, float theta_first);
     std::vector<float> sum_forces(std::vector<float> forces_angle, std::vector<float> forces_distance);
     float get_linear_depending_on_distance(float distance);
+    float get_nearest_obstacle_depending_on_direction(float direction);
     std::vector<float> get_smart_attractor_sector(float attractor_distance, float attractor_angle);
     float convert_to_pf(float distance);
+    float is_angle_in_range(float angle, float target, float range);
 
     // Compute parts of the potential field
     std::vector<float> get_force_attractors();
@@ -147,6 +149,14 @@ class SharedNavigation {
     ros::Timer  publish_timer_;
     ros::Timer  target_timer_;
     float       publish_frequency_;
+
+    // Shape of the robot
+    // TODO: Better implementation of n_vertices
+    const int n_vertices_ = 4;
+    std::vector<float> vertices_x_;
+    std::vector<float> vertices_y_;
+    std::vector<float> vertices_r_;
+    std::vector<float> vertices_t_;
 
     // Partial Velocity
     geometry_msgs::PoseArray partial_velocity_;

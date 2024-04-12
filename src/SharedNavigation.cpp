@@ -65,9 +65,9 @@ bool SharedNavigation::configure(void) {
 
   this->p_nh_.param<float>("angular_repellors_strength", this->dyn_angular_repellors_strength_, 0.5f);
   this->p_nh_.param<float>("angular_repellors_decay", this->dyn_angular_repellors_decay_, 0.8f);
-  this->p_nh_.param<float>("angular_attractors_strength", this->dyn_angular_attractors_strength_, 1.0f);
-  this->p_nh_.param<float>("linear_velocity_decay", this->dyn_linear_velocity_decay_, 1.0f);
-  this->p_nh_.param<float>("target_duration", this->target_duration_, 5.0f);
+  this->p_nh_.param<float>("angular_attractors_strength", this->dyn_angular_attractors_strength_, 1.0f); // TODO: remove this, no more used
+  this->p_nh_.param<float>("linear_velocity_decay", this->dyn_linear_velocity_decay_, 1.0f); // TODO: remove this, no more used 
+  this->p_nh_.param<float>("target_duration", this->target_duration_, 5.0f); // TODO: remove this, no more used
 
   // Initialize the angles of the robot
   // TODO: This should be a parameter
@@ -141,6 +141,8 @@ void SharedNavigation::MakeVelocity(void) {
     // Here there should be a choice, get an attractor directly or
     // use the "smart" selector, as now it will only use the second option
     force_attractors = this->get_force_attractors();
+    // Now is needed to compensate that attractor is one, but the force is four
+    //force_attractors[0] *= 4.0f; // TODO: update this to a better implementation such as a parameter
   }
 
   if(this->n_enable_repellors_ == true) {
@@ -148,8 +150,8 @@ void SharedNavigation::MakeVelocity(void) {
     force_repellors = this->get_force_repellors();
   }
 
-  ROS_INFO("Force repellors: [%f, %f]", force_repellors[0], force_repellors[1]);
-  ROS_INFO("Force attractors: [%f, %f]", force_attractors[0], force_attractors[1]);
+  ROS_DEBUG("Force repellors: [%f, %f]", force_repellors[0], force_repellors[1]);
+  ROS_DEBUG("Force attractors: [%f, %f]", force_attractors[0], force_attractors[1]);
 
   // The minus in the force is due to the orientation of the robot (reversed)
   std::vector<float> final_force_theta = {-force_repellors[1], -force_attractors[1]};
@@ -243,7 +245,7 @@ float SharedNavigation::get_linear_depending_on_distance(float distance) {
     vlinear = this->dyn_linear_velocity_max_;
   }
 
-  if (this->target_ > M_PI/2.0 || this->target_ < -M_PI/2.0) {
+  if (this->target_ > M_PI * (2.0f/3.0f) || this->target_ < -M_PI * (2.0f/3.0f)) {
     // Invert the linear velocity
     vlinear = -vlinear;
   }
@@ -394,7 +396,8 @@ std::vector<float> SharedNavigation::get_smart_attractor_sector(float attractor_
         } else {
           // Here there is the problem, what is the base case? For now set the sector to 0.0 and hope this situation will be solved
           // By the user or by the environment
-          attractor_sector[0] = 0.0f;
+          // TODO: check what to do in this case
+          attractor_sector[0] = 1.0f;
           attractor_sector[1] = 0.0f;
         }
       }

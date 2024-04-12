@@ -168,13 +168,13 @@ class SharedNavigation {
     float dyn_linear_velocity_min_;
     float dyn_linear_velocity_max_;
 
-    float dyn_angular_repellors_strength_;
-    float dyn_angular_attractors_strength_;
+    float dyn_angular_repellors_strength_;  // TODO: remove this, no more used
+    float dyn_angular_attractors_strength_; // TODO: fuse this in a single variable
     float dyn_angular_repellors_decay_;
-    float dyn_linear_velocity_decay_;
+    float dyn_linear_velocity_decay_;       // TODO: remove this, no more used
 
-    float target_;
-    float target_duration_;
+    float target_;                          // TODO: remove this, no more used
+    float target_duration_;                 // TODO: remove this, no more used
 
     float nearest_obstacle_;
 
